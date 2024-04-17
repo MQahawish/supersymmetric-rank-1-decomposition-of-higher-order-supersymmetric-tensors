@@ -44,6 +44,9 @@ Computes a rank-1 supersymmetric tensor based on a given vector.
 ### `sum_rank1_supersymmetric_tensors`
 Sums a list of rank-1 tensors each scaled by a corresponding scalar.
 
+### `successive_rank1_decomp`
+reconstructing the tensor sucessivly from estimated rank-1 components.
+
 ### `projected_gradient_method`
 Applies the projected gradient method for optimization on tensor spaces. (Good start is alpha=[0.01,0.1] , beta=[0.4,0.8])
 
