@@ -9,49 +9,17 @@ import json
 logging.basicConfig(level=logging.INFO,
                  format='%(asctime)s - %(levelname)s - %(message)s'
                  )
-# If cuda is available, device will be set to cuda. Otherwise, it will be set to cpu.
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-dtype = torch.float64  # Define the desired dtype for tensors
-
-def load_tensor_from_json(file_path,device):
-    # Load the JSON file
-    with open(file_path, 'r') as f:
-        tensors = json.load(f)
-
-    # Display tensors to the user for selection
-    print("Please choose one of the following tensors by entering its number:")
-    for i, tensor in enumerate(tensors):
-        print(f"{i + 1}: Tensor of order {tensor['order']} with dimensions {tensor['dimensions']}")
-
-    # User input to choose the tensor
-    choice = int(input("Enter your choice (number): ")) - 1
-    if choice < 0 or choice >= len(tensors):
-        print("Invalid choice, exiting.")
-        return None, None
-
-    # Extract the chosen tensor's data
-    selected_tensor = tensors[choice]
-    tensor_order = selected_tensor['order']
-    tensor_dimensions = selected_tensor['dimensions'][0]
-    tensor_entries = selected_tensor['entries']
-
-    # Create a PyTorch tensor from the entries
-    tensor = torch.tensor(tensor_entries, device=device, dtype=dtype)
-
-    return tensor_order, tensor_dimensions, tensor
+dtype = torch.float16  
 
 def random_supersymmetric_tensor(dimension, order, device='cpu'):
-    # Initialize an empty tensor of the given shape and type
     shape = (dimension,) * order
     tensor = torch.zeros(shape, dtype=dtype, device=device)
     
-    # Generate all possible index combinations for the given dimension and order
     indices_list = torch.combinations(torch.arange(dimension), order, with_replacement=True)
     
-    # Assign a random value to each unique set of indices and its permutations
     for indices in indices_list:
-        value = torch.rand(1, dtype=dtype, device=device)  # Generate a random value
-        # Set this value for all permutations of the current index tuple
+        value = torch.rand(1, dtype=dtype, device=device) 
         for perm in permutations(indices):
             tensor[perm] = value
 
@@ -73,48 +41,49 @@ def sum_rank1_supersymmetric_tensors(lambs_vectors, order):
         reconstructed_tensor += lamb * rank1_tensor
     return reconstructed_tensor
 
-def projected_gradient_method(tensor, max_iter, tol, alpha, beta, grid_size=100, device='cpu'):
+def projected_gradient_method(tensor, tol, alpha, beta, max_iter=100, grid_size=1000, device='cpu'):
     tensor = tensor.to(dtype)
     dimension = tensor.shape[0]
     order = tensor.ndim
     logging.info(f"Starting projected gradient method with tensor of shape {tensor.shape}")
 
-    # Generate a uniform grid of points on the unit sphere
     grid_points = generate_grid_points(dimension, grid_size, device)
     logging.info(f"Generated {grid_points.shape[0]} grid points on the unit sphere")
 
-    # Evaluate the tensor at each grid point and select the best one as the initial vector
     vector = select_initial_vector(tensor, grid_points)
-
     logging.info(f"Initial vector = {vector}, Norm: {torch.norm(vector)}")
 
     prev_vector = vector.clone()
+    prev_obj_value = compute_objective(tensor, prev_vector)
 
     i = 0
-    while True:
-            gradient = compute_gradient(tensor, vector, order)
-            projected_gradient = project_gradient(gradient)
-            stepsize = armijo_stepsize_rule(tensor, vector, projected_gradient, alpha, beta)
-            prev_vector = vector.clone()
-            vector = update_vector(vector, stepsize, projected_gradient)
+    while i < max_iter:
+        gradient = compute_gradient(tensor, vector, order)
+        projected_gradient = project_gradient(gradient)
+        stepsize = armijo_stepsize_rule(tensor, vector, projected_gradient, alpha, beta)
+        vector = update_vector(vector, stepsize, projected_gradient)
 
-            logging.info(f"~~~~~~Iteration {i+1}: Stepsize = {stepsize} , Gradient = {gradient}")
+        obj_value = compute_objective(tensor, vector)
+        logging.info(f"~~~~~~Iteration {i+1}: Stepsize = {stepsize}, Objective Value = {obj_value}")
 
-            if torch.norm(vector - prev_vector) < tol:
-                logging.info(f"Converged after {i+1} iterations")
-                break
-            
-            i += 1
+        if torch.norm(vector - prev_vector) < tol or abs(obj_value - prev_obj_value) < tol:
+            logging.info(f"Converged after {i+1} iterations")
+            break
+
+        prev_vector = vector.clone()
+        prev_obj_value = obj_value.clone()
+        i += 1
+
+    if i == max_iter:
+        logging.info(f"Reached maximum iterations ({max_iter})")
 
     lamb = compute_lambda(tensor, vector, order)
     logging.info(f"Projected gradient method completed, final lambda = {lamb}")
     return lamb, vector
 
 def generate_grid_points(dimension, grid_size, device):
-    # Generate random points from a normal distribution
     random_points = torch.randn(grid_size, dimension, device=device)
-    # Normalize each point to lie on the unit sphere
-    random_points /= torch.norm(random_points, dim=1, keepdim=True)
+    random_points /= torch.norm(random_points,p=2, dim=1, keepdim=True)
     return random_points
 
 def select_initial_vector(tensor, grid_points):
@@ -177,19 +146,18 @@ def successive_rank1_decomp(tensor, max_iter=100, tol=1e-6, alpha=0.01, beta=0.9
     tensor_res = tensor.clone().to(device)
     lambs = []
     vectors = []
-    residual_norms = []  # List to store the Frobenius norms of residual tensors
-
+    residual_norms = []
     logging.info(f"Starting successive rank-1 decomposition with tensor of shape {tensor.shape}")
     for i in range(max_iter):
-        lamb, vector = projected_gradient_method(tensor_res, max_iter*10, tol, alpha, beta, device=device)
+        lamb, vector = projected_gradient_method(tensor_res, tol, alpha, beta, device=device)
         lambs.append(lamb.cpu())
         vectors.append(vector.cpu())
 
         rank1_update = lamb * rank1_supersymmetric_tensor(vector, tensor.ndim).to(device)
         tensor_res -= rank1_update
 
-        residual_norm = torch.norm(tensor_res).item()  # Calculate the Frobenius norm of the residual tensor
-        residual_norms.append(residual_norm)  # Append the Frobenius norm to the list
+        residual_norm = torch.norm(tensor_res).item()  
+        residual_norms.append(residual_norm) 
         logging.info(f"Residual tensor norm = {residual_norm} , Lambda = {lamb}, Vector = {vector}")
 
         if residual_norm < tol:
@@ -199,33 +167,52 @@ def successive_rank1_decomp(tensor, max_iter=100, tol=1e-6, alpha=0.01, beta=0.9
 
     return lambs, vectors, residual_norms
 
+def collect_integer(prompt):
+    while True:
+        try:
+            return int(input(prompt))
+        except ValueError:
+            print("Please enter a valid integer.")
+
+def collect_float(prompt):
+    while True:
+        try:
+            return float(input(prompt))
+        except ValueError:
+            print("Please enter a valid number.")
+
+def generate_tensor():
+    dimension = collect_integer("Dimension: ")
+    order = collect_integer("Order: ")
+    tensor = random_supersymmetric_tensor(dimension, order, device='cpu')
+    return tensor, order
+
+def perform_decomposition(tensor, device):
+    max_iter = collect_integer("Enter max iterations: ")
+    tol = collect_float("Enter tolerance: ")
+    alpha = collect_float("Enter alpha: ")
+    beta = collect_float("Enter beta: ")
+    return successive_rank1_decomp(tensor, max_iter=max_iter, tol=tol, alpha=alpha, beta=beta, device=device)
+
+def plot_metrics(residual_norms):
+    plt.figure(figsize=(8, 6))
+    plt.plot(range(1, len(residual_norms) + 1), residual_norms, marker='o')
+    plt.xlabel('Iteration Steps')
+    plt.ylabel('Frobenius Norm of Residual Tensors')
+    plt.title('Frobenius Norm of Residual Tensors vs. Iteration Steps')
+    plt.grid(True)
+    plt.show()
 
 def main():
     while True:
-        # Example usage
-        print("Pick an option:")
-        print("1. Generate random tensor")
-        print("2. Pick tensor from test set")
-        option = int(input())
-        if option == 1:
-            print("Enter dimension and order of tensor:")
-            dimension = int(input("Dimension: "))
-            order = int(input("Order: "))
-            tensor = random_supersymmetric_tensor(dimension, order, device='cpu')
-        elif option == 2:
-            order, dimension, tensor = load_tensor_from_json('test_tensors.json',device='cpu')
-        else:
-            print("Invalid option")
-            continue
+        print("Generate random tensor(Dimension + Order)")
+        tensor, order = generate_tensor()
         print("Original Tensor:")
         print(tensor)
-        print("Origiinal tensor shape:", tensor.shape)
-        errors = []
-        max_iter = int(input("Enter max iterations: "))
-        tol = float(input("Enter tolerance: "))
-        alpha = float(input("Enter alpha: "))
-        beta = float(input("Enter beta: "))
-        lambs, vectors, residual_norms = successive_rank1_decomp(tensor, max_iter=max_iter, tol=tol, alpha=alpha, beta=beta, device=device)
+        print("Original tensor shape:", tensor.shape)
+
+        lambs, vectors, residual_norms = perform_decomposition(tensor, 'cpu')
+
         print("\nDecomposition Results:")
         for i, (lamb, vector) in enumerate(zip(lambs, vectors)):
             print(f"Rank-1 Tensor {i+1}:")
@@ -233,23 +220,15 @@ def main():
             print(f"Vector: {vector}")
             print()
 
-        tensor_recon = sum_rank1_supersymmetric_tensors(zip(lambs, vectors), order).to('cpu') # Reconstruct tensor on GPU
+        tensor_recon = sum_rank1_supersymmetric_tensors(zip(lambs, vectors), order).to('cpu')
         print("Original Tensor:")
         print(tensor)
         print("Reconstructed Tensor:")
         print(tensor_recon)
-
         error = torch.norm(tensor - tensor_recon).item()
         print(f"\nReconstruction Error: {error}")
-        errors.append(error)
-        # Plot the error vs. max_iter
-        plt.figure(figsize=(8, 6))
-        plt.plot(range(1, len(residual_norms) + 1), residual_norms, marker='o')
-        plt.xlabel('Iteration Steps')
-        plt.ylabel('Frobenius Norm of Residual Tensors')
-        plt.title('Frobenius Norm of Residual Tensors vs. Iteration Steps')
-        plt.grid(True)
-        plt.show()
+
+        plot_metrics(residual_norms)
 
 if __name__ == '__main__':
     main()
