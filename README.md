@@ -45,7 +45,7 @@ Computes a rank-1 supersymmetric tensor based on a given vector.
 Sums a list of rank-1 tensors each scaled by a corresponding scalar.
 
 ### `projected_gradient_method`
-Applies the projected gradient method for optimization on tensor spaces.
+Applies the projected gradient method for optimization on tensor spaces. (Good start is alpha=[0.01,0.1] , beta=[0.4,0.8])
 
 ### `generate_grid_points`
 Generates random points on the unit sphere for initial guesses in optimization algorithms.
